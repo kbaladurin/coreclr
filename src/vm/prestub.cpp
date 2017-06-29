@@ -667,6 +667,15 @@ GotNewCode:
                 // The notification will only occur if someone has registered for this method.
                 DACNotifyCompilationFinished(this);
             }
+#ifdef FEATURE_GDBJIT
+            else
+            {
+                PCODE pInstr = PCODEToPINSTR(pCode);
+                CodeHeader* pCH = (CodeHeader*)pInstr - 1;
+                delete reinterpret_cast<CalledMethodListHolderWrapper*>(pCH->GetCalledMethods());
+                pCH->SetCalledMethods(NULL);
+            }
+#endif
         }
     }
 

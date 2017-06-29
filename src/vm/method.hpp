@@ -3618,6 +3618,87 @@ public:
     void * GetCallAddr() { return m_CallAddr; }
     CalledMethod * GetNext() { return m_pNext; }
 };
+
+class CalledMethodList
+{
+private:
+    CalledMethod * m_pHead;
+public:
+    CalledMethodList() : m_pHead(NULL) {}
+    CalledMethod * GetHead() { return m_pHead; }
+    void Add(MethodDesc *pMD, void * addr) { m_pHead = new CalledMethod(pMD, addr, m_pHead); }
+    ~CalledMethodList()
+    {
+        CalledMethod *pHead = m_pHead;
+        while (pHead)
+        {
+            CalledMethod *pNext = pHead->GetNext();
+            delete pHead;
+            pHead = pNext;
+        }
+
+        m_pHead = NULL;
+    }
+};
+
+class CalledMethodListHolder
+{
+private:
+    CalledMethodList * m_pList;
+    int m_refCounter;
+public:
+    CalledMethodListHolder(CalledMethodList * list) : m_pList(list), m_refCounter(0) {}
+    int GetRefCounter() { return m_refCounter; }
+    CalledMethodList * GetList() { return m_pList; }
+    CalledMethodList * Retain()
+    {
+        ++m_refCounter;
+        return m_pList;
+    }
+    void Release()
+    {
+        --m_refCounter;
+        if (m_refCounter == -1)
+        {
+            delete this;
+        }
+    }
+    ~CalledMethodListHolder()
+    {
+        if (m_pList != NULL)
+        {
+            delete m_pList;
+        }
+
+        m_pList = NULL;
+    }
+};
+
+class CalledMethodListHolderWrapper
+{
+private:
+    CalledMethodListHolder * m_pListHolder;
+    CalledMethod * m_pHead;
+public:
+    CalledMethodListHolderWrapper(CalledMethodListHolder * listHolder) : m_pListHolder(listHolder), m_pHead(NULL)
+    {
+        if (m_pListHolder != NULL)
+        {
+            m_pListHolder->Retain();
+            m_pHead = listHolder->GetList()->GetHead();
+        }
+    }
+
+    CalledMethod * GetHead() { return m_pHead; }
+
+    ~CalledMethodListHolderWrapper()
+    {
+        if (m_pListHolder != NULL)
+        {
+            m_pListHolder->Release();
+        }
+    }
+};
 #endif
 
 #include "method.inl"

@@ -30,6 +30,9 @@ class AwareLock;
 class PtrArray;
 #if defined(FEATURE_GDBJIT)
 class CalledMethod;
+class CalledMethodList;
+class CalledMethodListHolder;
+class CalledMethodListHolderWrapper;
 #endif
 
 #include "genericdict.h"
@@ -1066,10 +1069,7 @@ public:
         LIMITED_METHOD_CONTRACT;
     }
 
-    virtual ~CEEInfo()
-    {
-        LIMITED_METHOD_CONTRACT;
-    }
+    virtual ~CEEInfo();
 
     // Performs any work JIT-related work that should be performed at process shutdown.
     void JitProcessShutdownWork();
@@ -1124,7 +1124,7 @@ public:
                                                    CORINFO_LOOKUP *pResultLookup);
 
 #if defined(FEATURE_GDBJIT)
-    CalledMethod * GetCalledMethods() { return m_pCalledMethods; }
+    CalledMethodListHolderWrapper * GetCalledMethods();
 #endif
 
 protected:
@@ -1151,7 +1151,7 @@ protected:
     MethodDesc *            m_pMethodForSecurity_Value;
 
 #if defined(FEATURE_GDBJIT)
-    CalledMethod *          m_pCalledMethods;
+    CalledMethodListHolder *          m_pCalledMethods;
 #endif
 
     // Tracking of module activation dependencies. We have two flavors: 

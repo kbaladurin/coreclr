@@ -2866,7 +2866,18 @@ void DACNotify::DoJITNotification(MethodDesc *MethodDescPtr)
         NotifyGdb::MethodCompiled(MethodDescPtr);
         tls_isSymReaderInProgress = false;
     }
-#endif    
+    else
+    {
+        PCODE pCode = MethodDescPtr->GetNativeCode();
+        if(pCode != NULL)
+        {
+            pCode = PCODEToPINSTR(pCode);
+            CodeHeader* pCH = (CodeHeader*)pCode - 1;
+            delete reinterpret_cast<CalledMethodListHolderWrapper*>(pCH->GetCalledMethods());
+            pCH->SetCalledMethods(NULL);
+        }
+    }
+#endif
     TADDR Args[2] = { JIT_NOTIFICATION, (TADDR) MethodDescPtr };
     DACNotifyExceptionHelper(Args, 2);
 }

@@ -1811,6 +1811,10 @@ void NotifyGdb::OnMethodCompiled(MethodDesc* methodDescPtr)
 
     pCode = PCODEToPINSTR(pCode);
 
+    CodeHeader* pCH = (CodeHeader*)pCode - 1;
+    NewHolder<CalledMethodListHolderWrapper> listHolderWrapper = reinterpret_cast<CalledMethodListHolderWrapper*>(pCH->GetCalledMethods());
+    pCH->SetCalledMethods(NULL);
+
     /* Get module name */
     const Module* mod = methodDescPtr->GetMethodTable()->GetModule();
     SString modName = mod->GetFile()->GetPath();
@@ -1895,14 +1899,12 @@ void NotifyGdb::OnMethodCompiled(MethodDesc* methodDescPtr)
     int method_count = countFuncs(symInfo, symInfoLen);
     FunctionMemberPtrArrayHolder method(method_count);
 
-    CodeHeader* pCH = (CodeHeader*)pCode - 1;
-    CalledMethod* pCalledMethods = reinterpret_cast<CalledMethod*>(pCH->GetCalledMethods());
+    CalledMethod* pCalledMethods = listHolderWrapper->GetHead();
     /* Collect addresses of thunks called by method */
     if (!CollectCalledMethods(pCalledMethods, (TADDR)methodDescPtr->GetNativeCode(), method, symbolNames, symbolCount))
     {
         return;
     }
-    pCH->SetCalledMethods(NULL);
 
     MetaSig sig(methodDescPtr);
     int nArgsCount = sig.NumFixedArgs();

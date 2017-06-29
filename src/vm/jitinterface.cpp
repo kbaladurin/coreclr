@@ -256,6 +256,26 @@ static BOOL ContextIsInstantiated(CORINFO_CONTEXT_HANDLE context)
     }
 }
 
+CEEInfo::~CEEInfo()
+{
+    LIMITED_METHOD_CONTRACT;
+
+#if defined(FEATURE_GDBJIT)
+    if (m_pCalledMethods != NULL)
+    {
+        m_pCalledMethods->Release();
+        m_pCalledMethods = NULL;
+    }
+#endif
+}
+
+#if defined(FEATURE_GDBJIT)
+CalledMethodListHolderWrapper * CEEInfo::GetCalledMethods()
+{
+    return new CalledMethodListHolderWrapper(m_pCalledMethods);
+}
+#endif
+
 /*********************************************************************/
 // This normalizes EE type information into the form expected by the JIT.
 //
@@ -8806,8 +8826,12 @@ void CEEInfo::getFunctionEntryPoint(CORINFO_METHOD_HANDLE  ftnHnd,
 
 
 #if defined(FEATURE_GDBJIT)
-    CalledMethod * pCM = new CalledMethod(orig_ftn, ret, m_pCalledMethods);
-    m_pCalledMethods = pCM;
+    if (m_pCalledMethods == NULL)
+    {
+        m_pCalledMethods = new CalledMethodListHolder(new CalledMethodList());
+    }
+
+    m_pCalledMethods->GetList()->Add(orig_ftn, ret);
 #endif
 
     EE_TO_JIT_TRANSITION();
@@ -11877,6 +11901,11 @@ CorJitResult invokeCompileMethodHelper(EEJitManager *jitMgr,
     if (SUCCEEDED(ret) && *nativeEntry != NULL)
     {
         CodeHeader* pCH = ((CodeHeader*)((PCODE)*nativeEntry & ~1)) - 1;
+        CalledMethodListHolderWrapper* pListHolderWrapper = reinterpret_cast<CalledMethodListHolderWrapper*>(pCH->GetCalledMethods());
+        if (pListHolderWrapper != NULL)
+        {
+            delete pListHolderWrapper;
+        }
         pCH->SetCalledMethods((PTR_VOID)comp->GetCalledMethods());
     }
 #endif
