@@ -14,6 +14,8 @@
 #include "formattype.h"
 #include "gdbjit.h"
 #include "gdbjithelpers.h"
+#include "opinfo.h"
+#include "virtualcallstub.h"
 
 TypeInfoBase*
 GetTypeInfoFromTypeHandle(TypeHandle typeHandle,
@@ -1777,7 +1779,121 @@ static int getNextPrologueIndex(int from, const SymbolsInfo *lines, int nlines)
     return -1;
 }
 
+template <typename T>
+T readData (BYTE *pBuffer, ULONG &position) {
+    T val;
+    memcpy(&val, pBuffer+position, sizeof(T));
+    position += sizeof(T);
+    return val;
+}
+
+unsigned int readOpcode(BYTE *pBuffer, ULONG &position)
+{
+    unsigned int c = readData<BYTE>(pBuffer, position);
+    if (c == 0xFE)
+    {
+        c = readData<BYTE>(pBuffer, position);
+        c |= 0x100;
+    }
+    return c;
+}
+
+TypeHandle GetTypeHandle(Module         *pModule,
+                         mdToken         tokMethod,
+                         SigTypeContext *pTypeContext){
+    TypeHandle th;
+
+    IMDInternalImport *pInternalImport = pModule->GetMDImport();
+    if(!pInternalImport->IsValidToken(tokMethod))
+    {
+        return th;
+    }
+
+    BOOL strictMetadataChecks = TRUE;
+    BOOL allowInstParam = FALSE;
+    MethodDesc * pMD = NULL;
+    FieldDesc * pFD = NULL;
+
+    switch (TypeFromToken(tokMethod))
+    {
+    case mdtMethodDef:
+        pMD = MemberLoader::GetMethodDescFromMethodDef(pModule, tokMethod, strictMetadataChecks);
+        th = pMD->GetMethodTable();
+        return th;
+
+    case mdtMemberRef:
+        MemberLoader::GetDescFromMemberRef(pModule, tokMethod, &pMD, &pFD, pTypeContext, strictMetadataChecks, &th);
+        return th;
+
+    case mdtMethodSpec:
+        MemberLoader::GetMethodDescFromMethodSpec(pModule, tokMethod, pTypeContext, strictMetadataChecks, allowInstParam, &th);
+        return th;
+
+    default:
+        return th;
+    }
+}
+
 static NotifyGdb::AddrSet codeAddrs;
+
+void NotifyGdb::CollectAllCalls(TK_CalledMethodMap &methodMap, MethodDesc* pMD, const SymbolsInfo* lines, unsigned nlines)
+{
+    COR_ILMETHOD *pHeader = pMD->GetILHeader();
+    COR_ILMETHOD_DECODER header(pHeader);
+    BYTE *pBuffer = (BYTE *) header.Code;
+    ULONG endCodePosition = header.GetCodeSize();
+
+    for (int i = 0; i < nlines; ++i)
+    {
+        bool source_is_call = lines[i].source & ICorDebugInfo::CALL_INSTRUCTION;
+        if (!source_is_call)
+            continue;
+
+        ULONG position = lines[i].ilOffset;
+        bool is_valid_offset = position >= 0 && position < endCodePosition;
+        if (!is_valid_offset)
+            continue;
+
+        int op = readOpcode(pBuffer, position);
+
+        if (op != CEE_CALLVIRT && op != CEE_CALL && op != CEE_NEWOBJ)
+            continue;
+
+        mdToken token = (mdToken)readData<LONG>(pBuffer, position);
+        SigTypeContext typeContext(pMD, TypeHandle());
+        BOOL strictMetadataChecks = TRUE;
+        BOOL allowInstParam = TRUE;
+        MethodDesc *calledMD = MemberLoader::GetMethodDescFromMemberDefOrRefOrSpec(pMD->GetModule(),
+                                                                                   token,
+                                                                                   &typeContext,
+                                                                                   strictMetadataChecks,
+                                                                                   allowInstParam);
+        if (!calledMD)
+            continue;
+
+        bool virtualCall = op == CEE_CALLVIRT;
+
+        TADDR call_addr = (TADDR)calledMD->TryGetMultiCallableAddrOfCode(CORINFO_ACCESS_ANY);
+        TADDR call_addr2 = 0;
+
+        if (virtualCall)
+        {
+            VirtualCallStubManager *pMgr = pMD->GetLoaderAllocator()->GetVirtualCallStubManager();
+
+            TypeHandle th = GetTypeHandle(pMD->GetModule(), token, &typeContext);
+
+            if (pMgr && !th.IsNull())
+                call_addr2 = pMgr->GetCallStub(th, calledMD);
+        }
+
+        if (call_addr != 0 && !methodMap.LookupPtr(call_addr) && !codeAddrs.Contains(call_addr))
+            methodMap.Add(call_addr, calledMD);
+
+        if (call_addr2 != 0 && !methodMap.LookupPtr(call_addr2) && !codeAddrs.Contains(call_addr2))
+            methodMap.Add(call_addr2, calledMD);
+
+    }
+}
 
 /* Create ELF/DWARF debug info for jitted method */
 void NotifyGdb::MethodCompiled(MethodDesc* methodDescPtr)
@@ -1895,14 +2011,11 @@ void NotifyGdb::OnMethodCompiled(MethodDesc* methodDescPtr)
     int method_count = countFuncs(symInfo, symInfoLen);
     FunctionMemberPtrArrayHolder method(method_count);
 
-    CodeHeader* pCH = (CodeHeader*)pCode - 1;
-    CalledMethod* pCalledMethods = reinterpret_cast<CalledMethod*>(pCH->GetCalledMethods());
     /* Collect addresses of thunks called by method */
-    if (!CollectCalledMethods(pCalledMethods, (TADDR)methodDescPtr->GetNativeCode(), method, symbolNames, symbolCount))
+    if (!CollectCalledMethods(methodDescPtr, symInfo, symInfoLen, method, symbolNames, symbolCount))
     {
         return;
     }
-    pCH->SetCalledMethods(NULL);
 
     MetaSig sig(methodDescPtr);
     int nArgsCount = sig.NumFixedArgs();
@@ -2592,41 +2705,36 @@ bool NotifyGdb::BuildDebugPub(MemBuf& buf, const char* name, uint32_t size, uint
 }
 
 /* Store addresses and names of the called methods into symbol table */
-bool NotifyGdb::CollectCalledMethods(CalledMethod* pCalledMethods,
-                                     TADDR nativeCode,
+bool NotifyGdb::CollectCalledMethods(MethodDesc* pMD,
+                                     const SymbolsInfo* lines,
+                                     unsigned nlines,
                                      FunctionMemberPtrArrayHolder &method,
                                      NewArrayHolder<Elf_Symbol> &symbolNames,
                                      int &symbolCount)
 {
-    AddrSet tmpCodeAddrs;
+    TK_CalledMethodMap methodMap;
+    CollectAllCalls(methodMap, pMD, lines, nlines);
 
+    const TADDR nativeCode = (TADDR)pMD->GetNativeCode();
     if (!codeAddrs.Contains(nativeCode))
         codeAddrs.Add(nativeCode);
 
-    CalledMethod* pList = pCalledMethods;
-
-     /* count called methods */
-    while (pList != NULL)
-    {
-        TADDR callAddr = (TADDR)pList->GetCallAddr();
-        if (!tmpCodeAddrs.Contains(callAddr) && !codeAddrs.Contains(callAddr)) {
-            tmpCodeAddrs.Add(callAddr);
-        }
-        pList = pList->GetNext();
-    }
-
-    symbolCount = 1 + method.GetCount() + tmpCodeAddrs.GetCount();
+    symbolCount = 1 + method.GetCount() + methodMap.GetCount();
     symbolNames = new Elf_Symbol[symbolCount];
 
-    pList = pCalledMethods;
+    if (symbolNames == nullptr)
+        return false;
+
     int i = 1 + method.GetCount();
-    while (i < symbolCount && pList != NULL)
+
+    TK_CalledMethodMap::Iterator end = methodMap.End();
+    for (TK_CalledMethodMap::Iterator it = methodMap.Begin(); it != end; ++it)
     {
-        TADDR callAddr = (TADDR)pList->GetCallAddr();
+        TADDR callAddr = (TADDR)it->Key();
         if (!codeAddrs.Contains(callAddr))
         {
-            MethodDesc* pMD = pList->GetMethodDesc();
-            LPCUTF8 methodName = pMD->GetName();
+            MethodDesc* calledMD = it->Value();
+            LPCUTF8 methodName = calledMD->GetName();
             int symbolNameLength = strlen(methodName) + sizeof("__thunk_");
             symbolNames[i].m_symbol_name = new char[symbolNameLength];
             symbolNames[i].m_name = symbolNames[i].m_symbol_name;
@@ -2635,7 +2743,6 @@ bool NotifyGdb::CollectCalledMethods(CalledMethod* pCalledMethods,
             ++i;
             codeAddrs.Add(callAddr);
         }
-        pList = pList->GetNext();
     }
     symbolCount = i;
     return true;

@@ -8783,9 +8783,6 @@ void CEEInfo::getFunctionEntryPoint(CORINFO_METHOD_HANDLE  ftnHnd,
     JIT_TO_EE_TRANSITION();
 
     MethodDesc * ftn = GetMethod(ftnHnd);
-#if defined(FEATURE_GDBJIT)
-    MethodDesc * orig_ftn = ftn;
-#endif
 
     // Resolve methodImpl.
     ftn = ftn->GetMethodTable()->MapMethodDeclToMethodImpl(ftn);
@@ -8803,12 +8800,6 @@ void CEEInfo::getFunctionEntryPoint(CORINFO_METHOD_HANDLE  ftnHnd,
         ret = ftn->GetAddrOfSlot();
         accessType = IAT_PVALUE;
     }
-
-
-#if defined(FEATURE_GDBJIT)
-    CalledMethod * pCM = new CalledMethod(orig_ftn, ret, m_pCalledMethods);
-    m_pCalledMethods = pCM;
-#endif
 
     EE_TO_JIT_TRANSITION();
 
@@ -11872,15 +11863,6 @@ CorJitResult invokeCompileMethodHelper(EEJitManager *jitMgr,
     }
 #endif // !defined(CROSSGEN_COMPILE)
     
-
-#if defined(FEATURE_GDBJIT)
-    if (SUCCEEDED(ret) && *nativeEntry != NULL)
-    {
-        CodeHeader* pCH = ((CodeHeader*)((PCODE)*nativeEntry & ~1)) - 1;
-        pCH->SetCalledMethods((PTR_VOID)comp->GetCalledMethods());
-    }
-#endif
-
     END_SO_TOLERANT_CODE;
 
     return ret;
