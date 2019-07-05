@@ -1146,7 +1146,7 @@ VIRTUALCommitMemory(
     curAllocationType = allocationType;
     curProtectionState = protectionState;
     runLength = 1;
-    nProtect = W32toUnixAccessControl(flProtect);
+    nProtect = W32toUnixAccessControl(flProtect, TRUE);
     vProtect = VIRTUALConvertWinFlags(flProtect);
 
     if (totalPages > pInformation->memSize / GetVirtualPageSize() - runStart)
@@ -1698,7 +1698,7 @@ VirtualProtect(
     }
 
     if ( 0 == mprotect( (LPVOID)StartBoundary, MemSize,
-                   W32toUnixAccessControl( flNewProtect ) ) )
+                   W32toUnixAccessControl( flNewProtect, TRUE ) ) )
     {
         /* Reset the access protection. */
         TRACE( "Number of pages to change %d, starting page %d \n",

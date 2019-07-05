@@ -32,7 +32,7 @@ SET_DEFAULT_DEBUG_CHANNEL(VIRTUAL);
  * W32toUnixAccessControl( DWORD ) - Maps Win32 to Unix memory access controls .
  *
  */
-INT W32toUnixAccessControl( IN DWORD flProtect )
+INT W32toUnixAccessControl( IN DWORD flProtect, IN BOOL allowError )
 {
     INT MemAccessControl = 0;
 
@@ -59,7 +59,10 @@ INT W32toUnixAccessControl( IN DWORD flProtect )
     
     default:
         MemAccessControl = 0;
-        ERROR( "Incorrect or no protection flags specified.\n" );
+        if (allowError)
+        {
+            ERROR( "Incorrect or no protection flags specified.\n" );
+        }
         break;
     }
     return MemAccessControl;
